@@ -4,6 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { parseConditions } from './conditions.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -161,6 +162,7 @@ export async function processTaskIpc(
     schedule_type?: string;
     schedule_value?: string;
     context_mode?: string;
+    conditions?: string;
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
@@ -254,6 +256,21 @@ export async function processTaskIpc(
           data.context_mode === 'group' || data.context_mode === 'isolated'
             ? data.context_mode
             : 'isolated';
+
+        // Validate conditions JSON if provided
+        let conditions: string | null = null;
+        if (data.conditions) {
+          const parsed = parseConditions(data.conditions);
+          if (parsed === null && data.conditions) {
+            logger.warn(
+              { conditions: data.conditions },
+              'Invalid conditions JSON in schedule_task',
+            );
+          } else if (parsed) {
+            conditions = data.conditions;
+          }
+        }
+
         createTask({
           id: taskId,
           group_folder: targetFolder,
@@ -262,6 +279,7 @@ export async function processTaskIpc(
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
+          conditions,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
@@ -354,6 +372,22 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
+        if (data.conditions !== undefined) {
+          // Validate before storing; empty string clears conditions
+          if (data.conditions === '') {
+            updates.conditions = null;
+          } else {
+            const parsed = parseConditions(data.conditions);
+            if (parsed === null) {
+              logger.warn(
+                { conditions: data.conditions },
+                'Invalid conditions JSON in update_task',
+              );
+            } else {
+              updates.conditions = data.conditions;
+            }
+          }
+        }
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {

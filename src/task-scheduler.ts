@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { evaluateConditions, parseConditions } from './conditions.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -143,6 +144,7 @@ async function runTask(
       schedule_value: t.schedule_value,
       status: t.status,
       next_run: t.next_run,
+      conditions: t.conditions,
     })),
   );
 
@@ -260,6 +262,26 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         const currentTask = getTaskById(task.id);
         if (!currentTask || currentTask.status !== 'active') {
           continue;
+        }
+
+        // Evaluate execution conditions before enqueueing
+        const conditionExpr = parseConditions(currentTask.conditions ?? null);
+        if (conditionExpr) {
+          const result = await evaluateConditions(conditionExpr);
+          if (!result.passed) {
+            const delayMs = result.retry_intervals * SCHEDULER_POLL_INTERVAL;
+            const retryAt = new Date(Date.now() + delayMs).toISOString();
+            updateTask(currentTask.id, { next_run: retryAt });
+            logger.info(
+              { taskId: currentTask.id, reason: result.reason, retryAt },
+              'Conditions not met, delaying',
+            );
+            continue;
+          }
+          logger.info(
+            { taskId: currentTask.id },
+            'All conditions met',
+          );
         }
 
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>

@@ -90,6 +90,30 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
+    conditions: z.any().optional().describe(`Execution conditions — delay the task until system state is right. Supports AND/OR tree composition.
+
+CONDITION TYPES:
+• { type: "battery_charging" } — device is charging
+• { type: "battery_level", operator: ">="|"<="|">"|"<", value: <number> } — battery percentage
+• { type: "low_power_mode", active: true|false } — Low Power Mode state
+• { type: "wifi_connected", ssid?: "<name>" } — WiFi connected (optionally to specific SSID)
+• { type: "network_reachable", host: "<hostname>" } — host is pingable
+• { type: "vpn_connected" } — any VPN is connected
+• { type: "cpu_usage", operator: ">="|"<="|">"|"<", value: <number> } — CPU usage percentage
+• { type: "process_running", name: "<process>", negate?: true } — process is running (or not)
+• { type: "screen_asleep", active: true|false } — screen sleep state
+• { type: "do_not_disturb", active: true|false } — Focus/DND state
+• { type: "schedule_window", cron: "<cron>" } — current time matches cron pattern (e.g., "* 9-17 * * 1-5" for weekdays 9am-5pm)
+
+Each condition accepts optional retry_intervals (default: 1) — multiplier for poll interval before retrying.
+
+COMPOSITION:
+• Array = implicit AND: [{ type: "battery_charging" }, { type: "wifi_connected" }]
+• Explicit AND: { and: [<condition>, ...] }
+• Explicit OR: { or: [<condition>, ...] }
+• Nested: { or: [{ and: [{ type: "battery_charging" }, { type: "wifi_connected" }] }, { type: "battery_level", operator: ">=", value: 80 }] }
+
+When conditions are not met, the task is delayed and retried later. No max retries — conditions are transient.`),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
@@ -132,13 +156,14 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 
     const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const data = {
+    const data: Record<string, unknown> = {
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
+      conditions: args.conditions ? JSON.stringify(args.conditions) : undefined,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
@@ -176,8 +201,23 @@ server.tool(
 
       const formatted = tasks
         .map(
-          (t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string }) =>
-            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
+          (t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string; conditions?: string }) => {
+            let line = `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`;
+            if (t.conditions) {
+              try {
+                const conds = JSON.parse(t.conditions);
+                const summary = Array.isArray(conds)
+                  ? conds.map((c: { type: string }) => c.type).join(' AND ')
+                  : conds.and ? 'AND group'
+                  : conds.or ? 'OR group'
+                  : conds.type || 'conditions';
+                line += ` [conditions: ${summary}]`;
+              } catch {
+                line += ` [conditions: set]`;
+              }
+            }
+            return line;
+          },
         )
         .join('\n');
 
@@ -255,6 +295,7 @@ server.tool(
     prompt: z.string().optional().describe('New prompt for the task'),
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+    conditions: z.any().optional().describe('New execution conditions (see schedule_task for format). Pass null or empty object to clear conditions.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -290,6 +331,7 @@ server.tool(
     if (args.prompt !== undefined) data.prompt = args.prompt;
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
+    if (args.conditions !== undefined) data.conditions = args.conditions ? JSON.stringify(args.conditions) : '';
 
     writeIpcFile(TASKS_DIR, data);
 
