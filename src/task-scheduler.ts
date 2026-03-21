@@ -278,10 +278,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
             );
             continue;
           }
-          logger.info(
-            { taskId: currentTask.id },
-            'All conditions met',
-          );
+          logger.info({ taskId: currentTask.id }, 'All conditions met');
         }
 
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>

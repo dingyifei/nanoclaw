@@ -105,8 +105,7 @@ export async function checkBattery(): Promise<{
 }> {
   try {
     const output = execShell('pmset -g batt');
-    const charging =
-      /charging/i.test(output) || /AC Power/i.test(output);
+    const charging = /charging/i.test(output) || /AC Power/i.test(output);
     const levelMatch = output.match(/(\d+)%/);
     const level = levelMatch ? parseInt(levelMatch[1], 10) : 0;
     return { charging, level };
@@ -190,9 +189,7 @@ export async function checkProcessRunning(name: string): Promise<boolean> {
 
 export async function checkScreenAsleep(): Promise<boolean> {
   try {
-    const output = execShell(
-      'ioreg -r -k AppleDisplayIsAsleep -d 1',
-    );
+    const output = execShell('ioreg -r -k AppleDisplayIsAsleep -d 1');
     return /"AppleDisplayIsAsleep"\s*=\s*1/.test(output);
   } catch (err) {
     logger.warn({ err }, 'Failed to check screen state');
@@ -263,10 +260,7 @@ async function evaluateLeaf(
     case 'battery_charging': {
       if (!batteryCache.value) batteryCache.value = await checkBattery();
       const { charging } = batteryCache.value;
-      logger.debug(
-        { type: 'battery_charging', charging },
-        'Condition check',
-      );
+      logger.debug({ type: 'battery_charging', charging }, 'Condition check');
       return {
         passed: charging,
         reason: charging ? 'Battery is charging' : 'Battery is not charging',
@@ -354,10 +348,7 @@ async function evaluateLeaf(
 
     case 'vpn_connected': {
       const connected = await checkVpn();
-      logger.debug(
-        { type: 'vpn_connected', connected },
-        'Condition check',
-      );
+      logger.debug({ type: 'vpn_connected', connected }, 'Condition check');
       return {
         passed: connected,
         reason: connected ? 'VPN is connected' : 'VPN is not connected',
@@ -465,7 +456,11 @@ async function evaluateLeaf(
       // Unknown condition type — skip gracefully (future-proofing)
       const unknownType = (condition as { type: string }).type;
       logger.warn({ type: unknownType }, 'Unknown condition type, skipping');
-      return { passed: true, reason: `Unknown type: ${unknownType}`, retry_intervals: 1 };
+      return {
+        passed: true,
+        reason: `Unknown type: ${unknownType}`,
+        retry_intervals: 1,
+      };
     }
   }
 }
