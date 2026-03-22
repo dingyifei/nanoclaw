@@ -70,11 +70,14 @@ describe('credential-proxy', () => {
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
   });
 
-  async function startProxy(env: Record<string, string>): Promise<number> {
+  async function startProxy(
+    env: Record<string, string>,
+    proxyToken?: string,
+  ): Promise<number> {
     Object.assign(mockEnv, env, {
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${upstreamPort}`,
     });
-    proxyServer = await startCredentialProxy(0);
+    proxyServer = await startCredentialProxy(0, '127.0.0.1', proxyToken);
     return (proxyServer.address() as AddressInfo).port;
   }
 
@@ -188,5 +191,162 @@ describe('credential-proxy', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.body).toBe('Bad Gateway');
+  });
+
+  describe('proxy token validation', () => {
+    const TOKEN = 'test-secret-token-abc123';
+
+    it('API-key mode accepts correct token', async () => {
+      proxyPort = await startProxy(
+        { ANTHROPIC_API_KEY: 'sk-ant-real-key' },
+        TOKEN,
+      );
+
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': TOKEN,
+          },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-real-key');
+    });
+
+    it('API-key mode rejects wrong token with 403', async () => {
+      proxyPort = await startProxy(
+        { ANTHROPIC_API_KEY: 'sk-ant-real-key' },
+        TOKEN,
+      );
+
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': 'wrong-token',
+          },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body).toBe('Forbidden');
+    });
+
+    it('API-key mode rejects missing token with 403', async () => {
+      proxyPort = await startProxy(
+        { ANTHROPIC_API_KEY: 'sk-ant-real-key' },
+        TOKEN,
+      );
+
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: { 'content-type': 'application/json' },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('OAuth mode accepts correct Bearer token', async () => {
+      proxyPort = await startProxy(
+        { CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth' },
+        TOKEN,
+      );
+
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/api/oauth/claude_cli/create_api_key',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${TOKEN}`,
+          },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(lastUpstreamHeaders['authorization']).toBe('Bearer real-oauth');
+    });
+
+    it('OAuth mode rejects wrong Bearer token with 403', async () => {
+      proxyPort = await startProxy(
+        { CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth' },
+        TOKEN,
+      );
+
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/api/oauth/claude_cli/create_api_key',
+          headers: {
+            'content-type': 'application/json',
+            authorization: 'Bearer wrong-token',
+          },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body).toBe('Forbidden');
+    });
+
+    it('OAuth mode allows post-exchange requests without Authorization', async () => {
+      proxyPort = await startProxy(
+        { CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth' },
+        TOKEN,
+      );
+
+      // Post-exchange: container uses temp x-api-key, no Authorization header
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': 'temp-key-from-exchange',
+          },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('no token configured allows all requests (backwards compat)', async () => {
+      proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+      const res = await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': 'anything',
+          },
+        },
+        '{}',
+      );
+
+      expect(res.statusCode).toBe(200);
+    });
   });
 });

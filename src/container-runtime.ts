@@ -28,8 +28,8 @@ function detectHostGateway(): string {
 
 /**
  * Address the credential proxy binds to.
- * Apple Container (macOS): 0.0.0.0 — the bridge100 interface doesn't exist at
- *   startup and containers reach the host via 192.168.64.1, not loopback.
+ * Apple Container (macOS): 192.168.64.1 — the bridge100 gateway. ensureBridge100()
+ *   must be called before binding to create the interface via a throwaway container.
  * Docker Desktop (macOS/WSL): 127.0.0.1 — the VM routes host.docker.internal to loopback.
  * Docker (Linux): bind to the docker0 bridge IP so only containers can reach it,
  *   falling back to 0.0.0.0 if the interface isn't found.
@@ -38,9 +38,10 @@ export const PROXY_BIND_HOST =
   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
 
 function detectProxyBindHost(): string {
-  // Apple Container uses a bridge network — proxy must be reachable on all interfaces
+  // Apple Container: bind to bridge100 gateway (not 0.0.0.0) to avoid exposing
+  // the credential proxy on WiFi/external interfaces.
   if (CONTAINER_RUNTIME_BIN === 'container' && os.platform() === 'darwin') {
-    return '0.0.0.0';
+    return '192.168.64.1';
   }
 
   if (os.platform() === 'darwin') return '127.0.0.1';
@@ -56,6 +57,67 @@ function detectProxyBindHost(): string {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
     if (ipv4) return ipv4.address;
   }
+  return '0.0.0.0';
+}
+
+/** Check whether bridge100 (Apple Container vmnet bridge) has an IPv4 address. */
+function hasBridge100(): boolean {
+  const ifaces = os.networkInterfaces();
+  const bridge = ifaces['bridge100'];
+  return !!bridge?.some((a) => a.family === 'IPv4');
+}
+
+/**
+ * Ensure the bridge100 interface exists before binding the credential proxy.
+ * Apple Container creates bridge100 via vmnet only when the first container runs,
+ * so we spawn a throwaway container to trigger it, then poll until it appears.
+ * Returns the address the proxy should bind to.
+ */
+export async function ensureBridge100(): Promise<string> {
+  // Only needed for Apple Container on macOS
+  if (CONTAINER_RUNTIME_BIN !== 'container' || os.platform() !== 'darwin') {
+    return PROXY_BIND_HOST;
+  }
+
+  // Respect explicit env override
+  if (process.env.CREDENTIAL_PROXY_HOST) {
+    return process.env.CREDENTIAL_PROXY_HOST;
+  }
+
+  if (hasBridge100()) {
+    logger.info('bridge100 already exists');
+    return '192.168.64.1';
+  }
+
+  // Spawn throwaway container to force vmnet to create bridge100
+  logger.info('Spawning throwaway container to create bridge100...');
+  try {
+    execSync(`${CONTAINER_RUNTIME_BIN} run --rm alpine /bin/true`, {
+      stdio: 'pipe',
+      timeout: 30000,
+    });
+  } catch (err) {
+    logger.warn(
+      { err },
+      'Throwaway container failed (bridge100 may still appear)',
+    );
+  }
+
+  // Poll for bridge100 (up to 5 seconds)
+  for (let i = 0; i < 10; i++) {
+    if (hasBridge100()) {
+      logger.info('bridge100 is now available');
+      return '192.168.64.1';
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  // Fallback with warning — token auth (Mitigation B) still protects
+  logger.warn(
+    'bridge100 did not appear after throwaway container. ' +
+      'Falling back to 0.0.0.0 — proxy will be exposed on all interfaces. ' +
+      'Set CREDENTIAL_PROXY_HOST=192.168.64.1 to override once bridge100 exists.',
+  );
   return '0.0.0.0';
 }
 

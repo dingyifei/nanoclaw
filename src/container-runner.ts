@@ -29,6 +29,13 @@ import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
+/** Per-session proxy token injected into containers as their credential value. */
+let proxyToken: string | undefined;
+
+export function setProxyToken(token: string): void {
+  proxyToken = token;
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -221,15 +228,17 @@ function buildContainerArgs(
     `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
   );
 
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
+  // Mirror the host's auth method with the proxy token as credential value.
+  // The proxy validates this token before injecting real credentials.
+  // API key mode: SDK sends x-api-key, proxy validates and replaces with real key.
+  // OAuth mode:   SDK exchanges token for temp API key, proxy validates and
+  //               injects real OAuth token on that exchange request.
   const authMode = detectAuthMode();
+  const credentialValue = proxyToken || 'placeholder';
   if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    args.push('-e', `ANTHROPIC_API_KEY=${credentialValue}`);
   } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    args.push('-e', `CLAUDE_CODE_OAUTH_TOKEN=${credentialValue}`);
   }
 
   // Runtime-specific args for host gateway resolution

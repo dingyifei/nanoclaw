@@ -9,6 +9,7 @@ import {
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { randomBytes } from 'crypto';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -18,14 +19,15 @@ import {
 import {
   ContainerOutput,
   runContainerAgent,
+  setProxyToken,
   writeGroupsSnapshot,
   writeHealthSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
   cleanupOrphans,
+  ensureBridge100,
   ensureContainerRuntimeRunning,
-  PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
   getAllChats,
@@ -544,10 +546,19 @@ async function main(): Promise<void> {
   loadState();
   restoreRemoteControl();
 
+  // Generate per-session token for proxy auth — containers must present this
+  // token as their credential value, preventing unauthorized proxy use.
+  const proxyToken = randomBytes(32).toString('hex');
+  setProxyToken(proxyToken);
+
+  // Ensure bridge100 exists (Apple Container) before binding the proxy
+  const proxyHost = await ensureBridge100();
+
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
-    PROXY_BIND_HOST,
+    proxyHost,
+    proxyToken,
   );
 
   // Graceful shutdown handlers

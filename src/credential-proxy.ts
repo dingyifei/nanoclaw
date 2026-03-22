@@ -26,6 +26,7 @@ export interface ProxyConfig {
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
+  proxyToken?: string,
 ): Promise<Server> {
   const secrets = readEnvFile([
     'ANTHROPIC_API_KEY',
@@ -46,6 +47,28 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // Validate proxy token — reject unauthorized requests
+      if (proxyToken) {
+        if (authMode === 'api-key') {
+          // API key mode: every request carries x-api-key with the proxy token
+          if (req.headers['x-api-key'] !== proxyToken) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+          }
+        } else {
+          // OAuth mode: validate exchange requests (carry Authorization header).
+          // Post-exchange requests use a temp x-api-key obtained via validated
+          // exchange — they're short-lived and only known to our containers.
+          const authHeader = req.headers['authorization'] as string | undefined;
+          if (authHeader && authHeader !== `Bearer ${proxyToken}`) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+          }
+        }
+      }
+
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
