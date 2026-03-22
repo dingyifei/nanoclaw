@@ -15,6 +15,11 @@ export const ASSISTANT_HAS_OWN_NUMBER =
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
+export const STALE_DEFERRAL_THRESHOLD = Math.max(
+  1,
+  parseInt(process.env.NANOCLAW_STALE_THRESHOLD || '10', 10),
+);
+export const DEFAULT_REMIND_INTERVAL_MS = 3600000; // 1 hour
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();

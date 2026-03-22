@@ -3,16 +3,25 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { evaluateConditions, parseConditions } from './conditions.js';
+import {
+  ConditionsConfig,
+  evaluateConditions,
+  parseConditions,
+} from './conditions.js';
 import {
   ContainerOutput,
+  HealthSnapshot,
+  TaskHealthData,
   runContainerAgent,
+  writeHealthSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
   getAllTasks,
   getDueTasks,
+  getRecentFailures,
   getTaskById,
+  getTaskRunStats,
   logTaskRun,
   updateTask,
   updateTaskAfterRun,
@@ -21,6 +30,84 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
+
+// ---------------------------------------------------------------------------
+// Deferral tracking
+// ---------------------------------------------------------------------------
+
+export interface DeferralState {
+  count: number;
+  firstDeferredAt: number;
+  lastReason: string;
+  alertedAt: number | null;
+  lastRemindedAt: number | null;
+}
+
+const deferralCounts = new Map<string, DeferralState>();
+
+export function getDeferralStates(): ReadonlyMap<string, DeferralState> {
+  return deferralCounts;
+}
+
+/** Check whether a task is stale given its deferral state and config. */
+function isTaskStale(state: DeferralState, config: ConditionsConfig): boolean {
+  if (config.staleAfter.type === 'deferrals') {
+    return state.count >= config.staleAfter.value;
+  }
+  return Date.now() - state.firstDeferredAt >= config.staleAfter.ms;
+}
+
+/** Build a HealthSnapshot from current state. */
+export function buildHealthSnapshot(
+  tasks: Array<{
+    id: string;
+    group_folder: string;
+    prompt: string;
+    status: string;
+    schedule_type: string;
+    schedule_value: string;
+    next_run: string | null;
+    last_run: string | null;
+    conditions?: string | null;
+  }>,
+): HealthSnapshot {
+  const healthTasks: TaskHealthData[] = tasks.map((t) => {
+    const deferral = deferralCounts.get(t.id);
+    const config = parseConditions(t.conditions ?? null);
+    return {
+      taskId: t.id,
+      groupFolder: t.group_folder,
+      prompt: t.prompt,
+      status: t.status,
+      schedule_type: t.schedule_type,
+      schedule_value: t.schedule_value,
+      next_run: t.next_run,
+      last_run: t.last_run,
+      conditions: t.conditions ?? null,
+      deferral: deferral
+        ? {
+            count: deferral.count,
+            since: new Date(deferral.firstDeferredAt).toISOString(),
+            reason: deferral.lastReason,
+          }
+        : null,
+      stale: deferral && config ? isTaskStale(deferral, config) : false,
+      run_stats: getTaskRunStats(t.id),
+    };
+  });
+
+  const recentFailures = getRecentFailures(10);
+
+  return {
+    generated_at: new Date().toISOString(),
+    tasks: healthTasks,
+    recent_failures: recentFailures.map((f) => ({
+      task_id: f.task_id,
+      run_at: f.run_at,
+      error: f.error,
+    })),
+  };
+}
 
 /**
  * Compute the next run time for a recurring task, anchored to the
@@ -133,20 +220,18 @@ async function runTask(
   // Update tasks snapshot for container to read (filtered by group)
   const isMain = group.isMain === true;
   const tasks = getAllTasks();
-  writeTasksSnapshot(
-    task.group_folder,
-    isMain,
-    tasks.map((t) => ({
-      id: t.id,
-      groupFolder: t.group_folder,
-      prompt: t.prompt,
-      schedule_type: t.schedule_type,
-      schedule_value: t.schedule_value,
-      status: t.status,
-      next_run: t.next_run,
-      conditions: t.conditions,
-    })),
-  );
+  const taskRows = tasks.map((t) => ({
+    id: t.id,
+    groupFolder: t.group_folder,
+    prompt: t.prompt,
+    schedule_type: t.schedule_type,
+    schedule_value: t.schedule_value,
+    status: t.status,
+    next_run: t.next_run,
+    conditions: t.conditions,
+  }));
+  writeTasksSnapshot(task.group_folder, isMain, taskRows);
+  writeHealthSnapshot(task.group_folder, isMain, buildHealthSnapshot(tasks));
 
   let result: string | null = null;
   let error: string | null = null;
@@ -265,19 +350,65 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         }
 
         // Evaluate execution conditions before enqueueing
-        const conditionExpr = parseConditions(currentTask.conditions ?? null);
-        if (conditionExpr) {
-          const result = await evaluateConditions(conditionExpr);
+        const config = parseConditions(currentTask.conditions ?? null);
+        if (config) {
+          const result = await evaluateConditions(config.expr);
           if (!result.passed) {
+            const state = deferralCounts.get(currentTask.id) ?? {
+              count: 0,
+              firstDeferredAt: Date.now(),
+              lastReason: '',
+              alertedAt: null,
+              lastRemindedAt: null,
+            };
+            state.count++;
+            state.lastReason = result.reason;
+            deferralCounts.set(currentTask.id, state);
+
+            // Check if stale and send reminders
+            if (isTaskStale(state, config)) {
+              const now = Date.now();
+              const shouldRemind =
+                !state.alertedAt ||
+                now - (state.lastRemindedAt ?? state.alertedAt) >=
+                  config.remindIntervalMs;
+
+              if (shouldRemind) {
+                if (!state.alertedAt) state.alertedAt = now;
+                state.lastRemindedAt = now;
+                logger.warn(
+                  {
+                    taskId: currentTask.id,
+                    deferralCount: state.count,
+                    reason: result.reason,
+                  },
+                  'Task stale',
+                );
+                deps
+                  .sendMessage(
+                    currentTask.chat_jid,
+                    `⚠️ Task "${currentTask.prompt.slice(0, 50)}..." deferred ${state.count}x since ${new Date(state.firstDeferredAt).toLocaleString()}. Condition: ${result.reason}`,
+                  )
+                  .catch(() => {});
+              }
+            }
+
             const delayMs = result.retry_intervals * SCHEDULER_POLL_INTERVAL;
             const retryAt = new Date(Date.now() + delayMs).toISOString();
             updateTask(currentTask.id, { next_run: retryAt });
             logger.info(
-              { taskId: currentTask.id, reason: result.reason, retryAt },
+              {
+                taskId: currentTask.id,
+                reason: result.reason,
+                retryAt,
+                deferralCount: state.count,
+              },
               'Conditions not met, delaying',
             );
             continue;
           }
+          // Conditions passed — reset deferral
+          deferralCounts.delete(currentTask.id);
           logger.info({ taskId: currentTask.id }, 'All conditions met');
         }
 
@@ -298,4 +429,5 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 /** @internal - for tests only. */
 export function _resetSchedulerLoopForTests(): void {
   schedulerRunning = false;
+  deferralCounts.clear();
 }

@@ -20,7 +20,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/conditions.ts` | Task execution conditions (battery, WiFi, CPU, etc.) |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+| `container/skills/` | Skills loaded inside agent containers (browser, status, health, formatting) |
 
 ## Skills
 

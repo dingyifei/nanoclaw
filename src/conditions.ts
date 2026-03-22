@@ -8,7 +8,12 @@ import { execSync } from 'child_process';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DEFAULT_REMIND_INTERVAL_MS,
+  SCHEDULER_POLL_INTERVAL,
+  STALE_DEFERRAL_THRESHOLD,
+  TIMEZONE,
+} from './config.js';
 import { logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
@@ -65,23 +70,111 @@ export interface ConditionResult {
   retry_intervals: number;
 }
 
+/** Parsed conditions config — expression tree + stale/reminder settings. */
+export interface ConditionsConfig {
+  expr: ConditionExpr;
+  /** Stale threshold: number of deferrals OR milliseconds duration. */
+  staleAfter:
+    | { type: 'deferrals'; value: number }
+    | { type: 'duration'; ms: number };
+  /** Reminder interval in ms after first stale alert. */
+  remindIntervalMs: number;
+}
+
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
 
-/** Parse a JSON conditions column. Returns null for null/empty (backward compat). */
-export function parseConditions(json: string | null): ConditionExpr | null {
+const DURATION_RE = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/;
+
+/** Parse a duration string like "30m", "2h", "1d" into milliseconds. */
+export function parseDuration(str: string): number | null {
+  const match = str.match(DURATION_RE);
+  if (!match) return null;
+  const value = parseFloat(match[1]);
+  switch (match[2]) {
+    case 'ms':
+      return value;
+    case 's':
+      return value * 1000;
+    case 'm':
+      return value * 60_000;
+    case 'h':
+      return value * 3_600_000;
+    case 'd':
+      return value * 86_400_000;
+    default:
+      return null;
+  }
+}
+
+function parseStaleAfter(raw: unknown): ConditionsConfig['staleAfter'] {
+  if (typeof raw === 'number' && raw > 0) {
+    return { type: 'deferrals', value: raw };
+  }
+  if (typeof raw === 'string') {
+    const ms = parseDuration(raw);
+    if (ms !== null && ms > 0) return { type: 'duration', ms };
+  }
+  return { type: 'deferrals', value: STALE_DEFERRAL_THRESHOLD };
+}
+
+function parseRemindInterval(raw: unknown): number {
+  if (typeof raw === 'string') {
+    const ms = parseDuration(raw);
+    if (ms !== null && ms > 0) return ms;
+  }
+  if (typeof raw === 'number' && raw > 0) return raw;
+  return DEFAULT_REMIND_INTERVAL_MS;
+}
+
+/** Parse a bare condition expression (array, leaf, or and/or node). */
+function parseConditionExpr(parsed: unknown): ConditionExpr | null {
+  if (parsed === null || parsed === undefined) return null;
+  if (Array.isArray(parsed)) {
+    if (parsed.length === 0) return null;
+    if (parsed.length === 1) return parsed[0] as ConditionExpr;
+    return { and: parsed as ConditionExpr[] };
+  }
+  return parsed as ConditionExpr;
+}
+
+/**
+ * Parse a JSON conditions column into a ConditionsConfig.
+ *
+ * Supports two formats:
+ * - Bare: `[{type: "..."}, ...]` or `{type: "..."}` or `{and: [...]}` — uses defaults
+ * - Wrapper: `{conditions: [...], stale_after: 10, remind_interval: "1h"}` — per-task config
+ */
+export function parseConditions(json: string | null): ConditionsConfig | null {
   if (!json) return null;
   try {
     const parsed = JSON.parse(json);
     if (parsed === null || parsed === undefined) return null;
-    // Flat array = implicit AND
-    if (Array.isArray(parsed)) {
-      if (parsed.length === 0) return null;
-      if (parsed.length === 1) return parsed[0] as ConditionExpr;
-      return { and: parsed as ConditionExpr[] };
+
+    // Wrapper format: has a "conditions" key
+    if (
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      'conditions' in parsed
+    ) {
+      const expr = parseConditionExpr(parsed.conditions);
+      if (!expr) return null;
+      return {
+        expr,
+        staleAfter: parseStaleAfter(parsed.stale_after),
+        remindIntervalMs: parseRemindInterval(parsed.remind_interval),
+      };
     }
-    return parsed as ConditionExpr;
+
+    // Bare format: the JSON itself is the condition expression
+    const expr = parseConditionExpr(parsed);
+    if (!expr) return null;
+    return {
+      expr,
+      staleAfter: { type: 'deferrals', value: STALE_DEFERRAL_THRESHOLD },
+      remindIntervalMs: DEFAULT_REMIND_INTERVAL_MS,
+    };
   } catch (err) {
     logger.warn({ json, err }, 'Malformed conditions JSON');
     return null;

@@ -19,6 +19,7 @@ import {
   ContainerOutput,
   runContainerAgent,
   writeGroupsSnapshot,
+  writeHealthSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
@@ -56,8 +57,12 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { extractSessionCommand, handleSessionCommand, isSessionCommandAllowed } from './session-commands.js';
-import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  extractSessionCommand,
+  handleSessionCommand,
+  isSessionCommandAllowed,
+} from './session-commands.js';
+import { buildHealthSnapshot, startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -178,18 +183,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     timezone: TIMEZONE,
     deps: {
       sendMessage: (text) => channel.sendMessage(chatJid, text),
-      setTyping: (typing) => channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
-      runAgent: (prompt, onOutput) => runAgent(group, prompt, chatJid, onOutput),
+      setTyping: (typing) =>
+        channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) =>
+        runAgent(group, prompt, chatJid, onOutput),
       closeStdin: () => queue.closeStdin(chatJid),
-      advanceCursor: (ts) => { lastAgentTimestamp[chatJid] = ts; saveState(); },
+      advanceCursor: (ts) => {
+        lastAgentTimestamp[chatJid] = ts;
+        saveState();
+      },
       formatMessages,
       canSenderInteract: (msg) => {
         const hasTrigger = TRIGGER_PATTERN.test(msg.content.trim());
         const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
-        return isMainGroup || !reqTrigger || (hasTrigger && (
-          msg.is_from_me ||
-          isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())
-        ));
+        return (
+          isMainGroup ||
+          !reqTrigger ||
+          (hasTrigger &&
+            (msg.is_from_me ||
+              isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())))
+        );
       },
     },
   });
@@ -305,19 +318,17 @@ async function runAgent(
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
-  writeTasksSnapshot(
-    group.folder,
-    isMain,
-    tasks.map((t) => ({
-      id: t.id,
-      groupFolder: t.group_folder,
-      prompt: t.prompt,
-      schedule_type: t.schedule_type,
-      schedule_value: t.schedule_value,
-      status: t.status,
-      next_run: t.next_run,
-    })),
-  );
+  const taskRows = tasks.map((t) => ({
+    id: t.id,
+    groupFolder: t.group_folder,
+    prompt: t.prompt,
+    schedule_type: t.schedule_type,
+    schedule_value: t.schedule_value,
+    status: t.status,
+    next_run: t.next_run,
+  }));
+  writeTasksSnapshot(group.folder, isMain, taskRows);
+  writeHealthSnapshot(group.folder, isMain, buildHealthSnapshot(tasks));
 
   // Update available groups snapshot (main group only can see all groups)
   const availableGroups = getAvailableGroups();
@@ -433,7 +444,12 @@ async function startMessageLoop(): Promise<void> {
             // Only close active container if the sender is authorized — otherwise an
             // untrusted user could kill in-flight work by sending /compact (DoS).
             // closeStdin no-ops internally when no container is active.
-            if (isSessionCommandAllowed(isMainGroup, loopCmdMsg.is_from_me === true)) {
+            if (
+              isSessionCommandAllowed(
+                isMainGroup,
+                loopCmdMsg.is_from_me === true,
+              )
+            ) {
               queue.closeStdin(chatJid);
             }
             // Enqueue so processGroupMessages handles auth + cursor advancement.
@@ -694,8 +710,11 @@ async function main(): Promise<void> {
         status: t.status,
         next_run: t.next_run,
       }));
+      const healthSnapshot = buildHealthSnapshot(tasks);
       for (const group of Object.values(registeredGroups)) {
-        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+        const isMain = group.isMain === true;
+        writeTasksSnapshot(group.folder, isMain, taskRows);
+        writeHealthSnapshot(group.folder, isMain, healthSnapshot);
       }
     },
   });

@@ -113,7 +113,14 @@ COMPOSITION:
 • Explicit OR: { or: [<condition>, ...] }
 • Nested: { or: [{ and: [{ type: "battery_charging" }, { type: "wifi_connected" }] }, { type: "battery_level", operator: ">=", value: 80 }] }
 
-When conditions are not met, the task is delayed and retried later. No max retries — conditions are transient.`),
+When conditions are not met, the task is delayed and retried later. No max retries — conditions are transient.
+
+STALE DETECTION & REMINDERS:
+Wrap conditions in an object to configure per-task stale alerts:
+{ conditions: [<conditions>], stale_after: 10, remind_interval: "1h" }
+• stale_after: number of deferrals (e.g., 10) or duration string (e.g., "30m", "2h") before alerting the user
+• remind_interval: duration string (e.g., "1h") — how often to re-alert after the first stale warning
+Both are optional. Bare conditions (without wrapper) use global defaults (10 deferrals, 1h reminders).`),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
@@ -225,6 +232,48 @@ server.tool(
     } catch (err) {
       return {
         content: [{ type: 'text' as const, text: `Error reading tasks: ${err instanceof Error ? err.message : String(err)}` }],
+      };
+    }
+  },
+);
+
+server.tool(
+  'get_task_health',
+  'Get task health data including run statistics, condition deferral counts, and stale task detection. Main group sees all tasks, other groups see only their own.',
+  {
+    task_id: z.string().optional().describe('Optional: get health for a specific task. Omit to get all tasks.'),
+  },
+  async (args) => {
+    const healthFile = path.join(IPC_DIR, 'task_health.json');
+
+    try {
+      if (!fs.existsSync(healthFile)) {
+        return {
+          content: [{ type: 'text' as const, text: 'No health data available yet. Health data is generated when tasks run.' }],
+        };
+      }
+
+      const health = JSON.parse(fs.readFileSync(healthFile, 'utf-8'));
+
+      if (args.task_id) {
+        const task = health.tasks?.find(
+          (t: { taskId: string }) => t.taskId === args.task_id,
+        );
+        if (!task) {
+          return {
+            content: [{ type: 'text' as const, text: `Task ${args.task_id} not found in health data.` }],
+          };
+        }
+        return { content: [{ type: 'text' as const, text: JSON.stringify(task, null, 2) }] };
+      }
+
+      return { content: [{ type: 'text' as const, text: JSON.stringify(health, null, 2) }] };
+    } catch (err) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Error reading health data: ${err instanceof Error ? err.message : String(err)}`,
+        }],
       };
     }
   },

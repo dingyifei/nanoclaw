@@ -515,6 +515,65 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+export function getTaskRuns(
+  taskId: string,
+  limit: number = 20,
+): Array<TaskRunLog & { id: number }> {
+  return db
+    .prepare(
+      'SELECT * FROM task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT ?',
+    )
+    .all(taskId, limit) as Array<TaskRunLog & { id: number }>;
+}
+
+export function getRecentFailures(
+  limit: number = 10,
+): Array<TaskRunLog & { id: number }> {
+  return db
+    .prepare(
+      'SELECT * FROM task_run_logs WHERE status = ? ORDER BY run_at DESC LIMIT ?',
+    )
+    .all('error', limit) as Array<TaskRunLog & { id: number }>;
+}
+
+export function getTaskRunStats(taskId: string): {
+  total_runs: number;
+  success_count: number;
+  error_count: number;
+  avg_duration_ms: number;
+  last_error: string | null;
+  last_error_at: string | null;
+} {
+  const row = db
+    .prepare(
+      `SELECT
+        COUNT(*) as total_runs,
+        COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success_count,
+        COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) as error_count,
+        COALESCE(AVG(duration_ms), 0) as avg_duration_ms
+      FROM task_run_logs WHERE task_id = ?`,
+    )
+    .get(taskId) as {
+    total_runs: number;
+    success_count: number;
+    error_count: number;
+    avg_duration_ms: number;
+  };
+
+  const lastError = db
+    .prepare(
+      'SELECT error, run_at FROM task_run_logs WHERE task_id = ? AND status = ? ORDER BY run_at DESC LIMIT 1',
+    )
+    .get(taskId, 'error') as { error: string; run_at: string } | undefined;
+
+  return {
+    ...row,
+    avg_duration_ms: Math.round(row.avg_duration_ms || 0),
+    last_error: lastError?.error ?? null,
+    last_error_at: lastError?.run_at ?? null,
+  };
+}
+
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {

@@ -687,6 +687,65 @@ export function writeTasksSnapshot(
   fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
 }
 
+export interface TaskHealthData {
+  taskId: string;
+  groupFolder: string;
+  prompt: string;
+  status: string;
+  schedule_type: string;
+  schedule_value: string;
+  next_run: string | null;
+  last_run: string | null;
+  conditions: string | null;
+  deferral: {
+    count: number;
+    since: string | null;
+    reason: string | null;
+  } | null;
+  stale: boolean;
+  run_stats: {
+    total_runs: number;
+    success_count: number;
+    error_count: number;
+    avg_duration_ms: number;
+    last_error: string | null;
+    last_error_at: string | null;
+  };
+}
+
+export interface HealthSnapshot {
+  generated_at: string;
+  tasks: TaskHealthData[];
+  recent_failures: Array<{
+    task_id: string;
+    run_at: string;
+    error: string | null;
+  }>;
+}
+
+export function writeHealthSnapshot(
+  groupFolder: string,
+  isMain: boolean,
+  snapshot: HealthSnapshot,
+): void {
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
+  fs.mkdirSync(groupIpcDir, { recursive: true });
+
+  const filtered: HealthSnapshot = isMain
+    ? snapshot
+    : {
+        ...snapshot,
+        tasks: snapshot.tasks.filter((t) => t.groupFolder === groupFolder),
+        recent_failures: snapshot.recent_failures.filter((f) => {
+          const task = snapshot.tasks.find((t) => t.taskId === f.task_id);
+          return task && task.groupFolder === groupFolder;
+        }),
+      };
+
+  const healthFile = path.join(groupIpcDir, 'task_health.json');
+  fs.writeFileSync(healthFile, JSON.stringify(filtered, null, 2));
+}
+
 export interface AvailableGroup {
   jid: string;
   name: string;

@@ -108,6 +108,68 @@ This delays the retry by 5 × 60s = 5 minutes when the condition isn't met.
 - **AND**: uses the **max** `retry_intervals` of failing children (wait for the slowest blocker)
 - **OR**: uses the **min** `retry_intervals` of failing children (retry sooner since any branch could unblock)
 
+## Stale Detection & Reminders
+
+When conditions are never met, a task can be deferred indefinitely. Stale detection alerts the user when this happens.
+
+### Configuration
+
+Wrap conditions in an object to configure per-task stale alerts:
+
+```json
+{
+  "conditions": [
+    { "type": "wifi_connected", "ssid": "Office" },
+    { "type": "battery_charging" }
+  ],
+  "stale_after": 10,
+  "remind_interval": "1h"
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `stale_after` | number or duration string | `10` | Deferrals before alerting. Number = deferral count. String = time duration (e.g., `"30m"`, `"2h"`, `"1d"`). |
+| `remind_interval` | duration string | `"1h"` | How often to re-alert after the first stale warning. |
+
+Duration strings support: `ms`, `s`, `m`, `h`, `d` (e.g., `"30m"` = 30 minutes, `"2h"` = 2 hours).
+
+### Backward compatibility
+
+Bare conditions (without the wrapper object) still work. They use the global default threshold (`NANOCLAW_STALE_THRESHOLD` env var, default 10 deferrals) and 1-hour reminders.
+
+```json
+[{ "type": "battery_charging" }]
+```
+
+is equivalent to:
+
+```json
+{
+  "conditions": [{ "type": "battery_charging" }],
+  "stale_after": 10,
+  "remind_interval": "1h"
+}
+```
+
+### Behavior
+
+1. Each time conditions fail, the deferral count increments.
+2. When the threshold is reached, the user receives a chat message with the blocking condition.
+3. After the first alert, reminders repeat at `remind_interval` until conditions pass.
+4. When conditions pass and the task runs, the deferral counter resets.
+5. Deferral counts are in-memory — they reset on process restart.
+
+### Example: alert after 30 minutes, remind every 2 hours
+
+```json
+{
+  "conditions": { "type": "wifi_connected", "ssid": "Office" },
+  "stale_after": "30m",
+  "remind_interval": "2h"
+}
+```
+
 ## Examples
 
 ### Run only when charging and on WiFi

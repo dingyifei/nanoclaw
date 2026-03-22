@@ -8,7 +8,11 @@ import {
   getAllRegisteredGroups,
   getMessagesSince,
   getNewMessages,
+  getRecentFailures,
   getTaskById,
+  getTaskRunStats,
+  getTaskRuns,
+  logTaskRun,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
@@ -480,5 +484,131 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- Task run history queries ---
+
+describe('task run history', () => {
+  const TASK_ID = 'task-health-test';
+
+  beforeEach(() => {
+    createTask({
+      id: TASK_ID,
+      group_folder: 'main',
+      chat_jid: 'test@g.us',
+      prompt: 'test task',
+      schedule_type: 'interval',
+      schedule_value: '60000',
+      context_mode: 'isolated',
+      next_run: new Date().toISOString(),
+      status: 'active',
+      created_at: new Date().toISOString(),
+    });
+  });
+
+  it('getTaskRuns returns runs in descending order', () => {
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-01T00:00:00Z',
+      duration_ms: 100,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-02T00:00:00Z',
+      duration_ms: 200,
+      status: 'error',
+      result: null,
+      error: 'fail',
+    });
+
+    const runs = getTaskRuns(TASK_ID);
+    expect(runs).toHaveLength(2);
+    expect(runs[0].run_at).toBe('2026-01-02T00:00:00Z');
+    expect(runs[1].run_at).toBe('2026-01-01T00:00:00Z');
+  });
+
+  it('getTaskRuns respects limit', () => {
+    for (let i = 0; i < 5; i++) {
+      logTaskRun({
+        task_id: TASK_ID,
+        run_at: `2026-01-0${i + 1}T00:00:00Z`,
+        duration_ms: 100,
+        status: 'success',
+        result: null,
+        error: null,
+      });
+    }
+    expect(getTaskRuns(TASK_ID, 3)).toHaveLength(3);
+  });
+
+  it('getRecentFailures returns only errors', () => {
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-01T00:00:00Z',
+      duration_ms: 100,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-02T00:00:00Z',
+      duration_ms: 200,
+      status: 'error',
+      result: null,
+      error: 'boom',
+    });
+
+    const failures = getRecentFailures();
+    expect(failures).toHaveLength(1);
+    expect(failures[0].error).toBe('boom');
+  });
+
+  it('getTaskRunStats returns correct aggregates', () => {
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-01T00:00:00Z',
+      duration_ms: 100,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-02T00:00:00Z',
+      duration_ms: 300,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: TASK_ID,
+      run_at: '2026-01-03T00:00:00Z',
+      duration_ms: 200,
+      status: 'error',
+      result: null,
+      error: 'fail',
+    });
+
+    const stats = getTaskRunStats(TASK_ID);
+    expect(stats.total_runs).toBe(3);
+    expect(stats.success_count).toBe(2);
+    expect(stats.error_count).toBe(1);
+    expect(stats.avg_duration_ms).toBe(200);
+    expect(stats.last_error).toBe('fail');
+    expect(stats.last_error_at).toBe('2026-01-03T00:00:00Z');
+  });
+
+  it('getTaskRunStats returns zeros for no runs', () => {
+    const stats = getTaskRunStats(TASK_ID);
+    expect(stats.total_runs).toBe(0);
+    expect(stats.success_count).toBe(0);
+    expect(stats.error_count).toBe(0);
+    expect(stats.avg_duration_ms).toBe(0);
+    expect(stats.last_error).toBeNull();
   });
 });
