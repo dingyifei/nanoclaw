@@ -76,16 +76,9 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the credential proxy, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // .env shadowing: Apple Container only supports directory-level mounts (VirtioFS),
+    // so we cannot mount /dev/null over .env from the host side. Instead, the
+    // entrypoint.sh handles this inside the container via mount --bind /dev/null.
 
     // Main also gets its group folder as the working directory
     mounts.push({
