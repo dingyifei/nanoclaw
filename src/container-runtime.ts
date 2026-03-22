@@ -11,12 +11,26 @@ import { logger } from './logger.js';
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'container';
 
-/** Hostname containers use to reach the host machine. */
-export const CONTAINER_HOST_GATEWAY = 'host.docker.internal';
+/**
+ * Address containers use to reach the host machine.
+ * Docker Desktop (macOS/WSL): host.docker.internal is auto-resolved.
+ * Apple Container (macOS): uses 192.168.64.1 — the well-known bridge gateway.
+ * Docker (Linux): host.docker.internal added via --add-host flag.
+ */
+export const CONTAINER_HOST_GATEWAY = detectHostGateway();
+
+function detectHostGateway(): string {
+  if (CONTAINER_RUNTIME_BIN === 'container' && os.platform() === 'darwin') {
+    return '192.168.64.1';
+  }
+  return 'host.docker.internal';
+}
 
 /**
  * Address the credential proxy binds to.
- * Docker Desktop (macOS): 127.0.0.1 — the VM routes host.docker.internal to loopback.
+ * Apple Container (macOS): 0.0.0.0 — the bridge100 interface doesn't exist at
+ *   startup and containers reach the host via 192.168.64.1, not loopback.
+ * Docker Desktop (macOS/WSL): 127.0.0.1 — the VM routes host.docker.internal to loopback.
  * Docker (Linux): bind to the docker0 bridge IP so only containers can reach it,
  *   falling back to 0.0.0.0 if the interface isn't found.
  */
@@ -24,6 +38,11 @@ export const PROXY_BIND_HOST =
   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
 
 function detectProxyBindHost(): string {
+  // Apple Container uses a bridge network — proxy must be reachable on all interfaces
+  if (CONTAINER_RUNTIME_BIN === 'container' && os.platform() === 'darwin') {
+    return '0.0.0.0';
+  }
+
   if (os.platform() === 'darwin') return '127.0.0.1';
 
   // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.
