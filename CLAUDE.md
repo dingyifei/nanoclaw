@@ -16,6 +16,7 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/appium-bridge.ts` | HTTP bridge exposing appium-mcp to containers |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/conditions.ts` | Task execution conditions (battery, WiFi, CPU, etc.) |
 | `src/db.ts` | SQLite operations |

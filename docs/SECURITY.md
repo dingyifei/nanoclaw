@@ -81,6 +81,18 @@ Real API credentials **never enter containers**. Instead, the host runs an HTTP 
 - Any credentials matching blocked patterns
 - `.env` is shadowed with `/dev/null` in the project root mount
 
+### 6. Appium MCP Bridge (Optional)
+
+When `APPIUM_BRIDGE_ENABLED=true`, the host exposes `appium-mcp` to containers for physical device control (Android/iOS over USB). Security follows the credential proxy pattern:
+
+- **Network binding** — Bound to the bridge interface (`PROXY_BIND_HOST`), not WiFi-facing
+- **Token auth** — Same per-session 32-byte hex token as the credential proxy; every request must include `Authorization: Bearer <token>`
+- **Per-group opt-in** — Only groups with `containerConfig.appium: true` receive the bridge URL; other groups have no access
+- **No credential exposure** — Containers never see ADB keys (`~/.android/`) or device pairing secrets
+- **Physical device access** — ADB over USB uses RSA key pairing (device must explicitly trust the host); WiFi ADB is not used
+
+**Risk:** A container with appium access can interact with any app on the connected device. This is by design — the feature is opt-in per group and intended for trusted (main group) use only.
+
 ## Privilege Comparison
 
 | Capability | Main Group | Non-Main Group |
@@ -108,6 +120,7 @@ Real API credentials **never enter containers**. Instead, the host runs an HTTP 
 │  • Mount validation (external allowlist)                          │
 │  • Container lifecycle                                            │
 │  • Credential proxy (injects auth headers)                       │
+│  • Appium bridge (optional, token-authed device control)        │
 └────────────────────────────────┬─────────────────────────────────┘
                                  │
                                  ▼ Explicit mounts only, no secrets
@@ -117,6 +130,7 @@ Real API credentials **never enter containers**. Instead, the host runs an HTTP 
 │  • Bash commands (sandboxed)                                      │
 │  • File operations (limited to mounts)                            │
 │  • API calls routed through credential proxy                     │
+│  • Device control via Appium bridge (if enabled)                │
 │  • No real credentials in environment or filesystem              │
 └──────────────────────────────────────────────────────────────────┘
 ```

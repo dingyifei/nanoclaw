@@ -632,6 +632,50 @@ The `nanoclaw` MCP server is created dynamically per agent call with the current
 | `cancel_task` | Delete a task |
 | `send_message` | Send a message to the group via its channel |
 
+### Appium MCP Bridge (optional)
+
+Exposes `appium-mcp` (appium/appium-mcp, Apache-2.0) to container agents for controlling physical Android and iOS devices over USB. Enabled via `APPIUM_BRIDGE_ENABLED=true` in `.env`.
+
+**Architecture:**
+```
+Container Agent ──HTTP──▶ appium-bridge (host:3002) ──stdio──▶ appium-mcp ──ADB/USB──▶ Device
+```
+
+The bridge follows the same pattern as the credential proxy:
+- Binds to the bridge interface (`PROXY_BIND_HOST`), not exposed on WiFi
+- Validates `Authorization: Bearer <token>` using the same per-session proxy token
+- Per-group opt-in via `containerConfig.appium: true`
+
+**Environment variables (host `.env`):**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APPIUM_BRIDGE_ENABLED` | `false` | Enable the Appium bridge |
+| `APPIUM_BRIDGE_PORT` | `3002` | Port for the bridge HTTP server |
+| `ANDROID_HOME` | — | Android SDK path (required for Android devices) |
+| `JAVA_HOME` | — | JDK path (required by Appium) |
+
+**Container env vars (injected automatically for appium-enabled groups):**
+| Variable | Description |
+|----------|-------------|
+| `APPIUM_BRIDGE_URL` | `http://<host-gateway>:3002/mcp` |
+| `APPIUM_BRIDGE_TOKEN` | Bearer token for auth |
+
+**Per-group enablement:**
+
+Set `containerConfig.appium = true` on the group's registration:
+```json
+{ "additionalMounts": [], "appium": true }
+```
+
+**Prerequisites:**
+- `appium-mcp` installed globally (`npm install -g appium-mcp`) or available via `npx`
+- Android SDK with platform-tools (for Android devices)
+- Xcode + XCUITest driver (for iOS devices)
+- JDK 8+
+- Device connected via USB with debugging enabled
+
+**Available tools (47):** The agent gets access to all `appium-mcp` tools via the `mcp__appium__*` pattern, including `select_platform`, `create_session`, `appium_screenshot`, `appium_tap_by_coordinates`, `appium_click`, `appium_set_value`, `appium_find_element`, `appium_swipe`, `appium_scroll`, `appium_launch_app`, and more.
+
 ---
 
 ## Deployment

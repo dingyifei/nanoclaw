@@ -1,7 +1,10 @@
 import fs from 'fs';
+import { Server } from 'http';
 import path from 'path';
 
 import {
+  APPIUM_BRIDGE_ENABLED,
+  APPIUM_BRIDGE_PORT,
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
@@ -9,6 +12,7 @@ import {
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { startAppiumBridge } from './appium-bridge.js';
 import { randomBytes } from 'crypto';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
@@ -561,10 +565,21 @@ async function main(): Promise<void> {
     proxyToken,
   );
 
+  // Start Appium MCP bridge (optional — exposes appium-mcp to containers)
+  let appiumServer: Server | undefined;
+  if (APPIUM_BRIDGE_ENABLED) {
+    appiumServer = await startAppiumBridge(
+      APPIUM_BRIDGE_PORT,
+      proxyHost,
+      proxyToken,
+    );
+  }
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    appiumServer?.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);

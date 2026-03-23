@@ -7,6 +7,8 @@ import fs from 'fs';
 import path from 'path';
 
 import {
+  APPIUM_BRIDGE_ENABLED,
+  APPIUM_BRIDGE_PORT,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -216,6 +218,7 @@ function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   isMain: boolean,
+  group?: RegisteredGroup,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -243,6 +246,15 @@ function buildContainerArgs(
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // Appium MCP bridge — inject URL and token for device control
+  if (APPIUM_BRIDGE_ENABLED && group?.containerConfig?.appium) {
+    args.push(
+      '-e',
+      `APPIUM_BRIDGE_URL=http://${CONTAINER_HOST_GATEWAY}:${APPIUM_BRIDGE_PORT}/mcp`,
+    );
+    args.push('-e', `APPIUM_BRIDGE_TOKEN=${proxyToken || ''}`);
+  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
@@ -288,7 +300,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain, group);
 
   logger.debug(
     {
