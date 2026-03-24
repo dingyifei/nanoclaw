@@ -173,46 +173,51 @@ export function startAppiumBridge(
   spawnChild();
 
   return new Promise((resolve, reject) => {
-    const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      // Token auth
-      const authHeader = req.headers['authorization'];
-      if (authHeader !== `Bearer ${proxyToken}`) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Forbidden' }));
-        return;
-      }
-
-      // Only accept POST /mcp
-      if (req.method !== 'POST' || !req.url?.startsWith('/mcp')) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-        return;
-      }
-
-      // Read request body
-      const chunks: Buffer[] = [];
-      req.on('data', (c) => chunks.push(c));
-      req.on('end', async () => {
-        const body = Buffer.concat(chunks).toString();
-        try {
-          const response = await sendToChild(body);
-          res.writeHead(200, {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-          });
-          res.end(response);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : 'Internal error';
-          logger.error({ err }, 'Appium bridge request failed');
-          res.writeHead(502, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            jsonrpc: '2.0',
-            error: { code: -32603, message },
-            id: null,
-          }));
+    const server = createServer(
+      async (req: IncomingMessage, res: ServerResponse) => {
+        // Token auth
+        const authHeader = req.headers['authorization'];
+        if (authHeader !== `Bearer ${proxyToken}`) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden' }));
+          return;
         }
-      });
-    });
+
+        // Only accept POST /mcp
+        if (req.method !== 'POST' || !req.url?.startsWith('/mcp')) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Not found' }));
+          return;
+        }
+
+        // Read request body
+        const chunks: Buffer[] = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', async () => {
+          const body = Buffer.concat(chunks).toString();
+          try {
+            const response = await sendToChild(body);
+            res.writeHead(200, {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+            });
+            res.end(response);
+          } catch (err) {
+            const message =
+              err instanceof Error ? err.message : 'Internal error';
+            logger.error({ err }, 'Appium bridge request failed');
+            res.writeHead(502, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32603, message },
+                id: null,
+              }),
+            );
+          }
+        });
+      },
+    );
 
     server.listen(port, host, () => {
       logger.info({ port, host }, 'Appium bridge started');

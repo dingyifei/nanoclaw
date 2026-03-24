@@ -8,6 +8,8 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  APPIUM_BRIDGE_ENABLED: false,
+  APPIUM_BRIDGE_PORT: 3002,
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -51,6 +53,12 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
+// Mock env file reader — default returns empty (no GITHUB_TOKEN)
+let mockEnvValues: Record<string, string> = {};
+vi.mock('./env.js', () => ({
+  readEnvFile: vi.fn(() => ({ ...mockEnvValues })),
+}));
+
 // Create a controllable fake ChildProcess
 function createFakeProcess() {
   const proc = new EventEmitter() as EventEmitter & {
@@ -86,6 +94,7 @@ vi.mock('child_process', async () => {
   };
 });
 
+import { spawn } from 'child_process';
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
@@ -206,5 +215,90 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('container-runner GitHub token forwarding', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    mockEnvValues = {};
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('passes GITHUB_TOKEN to container when set in .env', async () => {
+    mockEnvValues = { GITHUB_TOKEN: 'ghp_test123' };
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    const spawnArgs = (spawn as unknown as ReturnType<typeof vi.fn>).mock
+      .lastCall![1] as string[];
+    const tokenIdx = spawnArgs.indexOf('GITHUB_TOKEN=ghp_test123');
+    expect(tokenIdx).toBeGreaterThan(-1);
+    expect(spawnArgs[tokenIdx - 1]).toBe('-e');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+  });
+
+  it('excludes GITHUB_TOKEN when not in .env', async () => {
+    mockEnvValues = {};
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    const spawnArgs = (spawn as unknown as ReturnType<typeof vi.fn>).mock
+      .lastCall![1] as string[];
+    const hasToken = spawnArgs.some((arg: string) =>
+      arg.includes('GITHUB_TOKEN'),
+    );
+    expect(hasToken).toBe(false);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+  });
+
+  it('forwards GIT_USER_NAME and GIT_USER_EMAIL with GITHUB_TOKEN', async () => {
+    mockEnvValues = {
+      GITHUB_TOKEN: 'ghp_abc',
+      GIT_USER_NAME: 'Test User',
+      GIT_USER_EMAIL: 'test@example.com',
+    };
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    const spawnArgs = (spawn as unknown as ReturnType<typeof vi.fn>).mock
+      .lastCall![1] as string[];
+    expect(spawnArgs).toContain('GITHUB_TOKEN=ghp_abc');
+    expect(spawnArgs).toContain('GIT_USER_NAME=Test User');
+    expect(spawnArgs).toContain('GIT_USER_EMAIL=test@example.com');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
+  });
+
+  it('excludes GIT_USER_NAME/EMAIL when GITHUB_TOKEN is missing', async () => {
+    mockEnvValues = {
+      GIT_USER_NAME: 'Test User',
+      GIT_USER_EMAIL: 'test@example.com',
+    };
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    const spawnArgs = (spawn as unknown as ReturnType<typeof vi.fn>).mock
+      .lastCall![1] as string[];
+    const hasGitUser = spawnArgs.some((arg: string) =>
+      arg.includes('GIT_USER_NAME'),
+    );
+    expect(hasGitUser).toBe(false);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+    await resultPromise;
   });
 });

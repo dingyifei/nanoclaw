@@ -28,6 +28,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -57,6 +58,29 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+}
+
+/** Env var names whose values must not appear in logs. */
+const REDACTED_ENV_VARS = new Set([
+  'GITHUB_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+]);
+
+/** Redact sensitive env var values from container arg arrays before logging. */
+function redactArgs(args: string[]): string {
+  return args
+    .map((arg, i) => {
+      if (i > 0 && args[i - 1] === '-e') {
+        const eqIdx = arg.indexOf('=');
+        if (eqIdx !== -1) {
+          const key = arg.slice(0, eqIdx);
+          if (REDACTED_ENV_VARS.has(key)) return `${key}=***`;
+        }
+      }
+      return arg;
+    })
+    .join(' ');
 }
 
 interface VolumeMount {
@@ -247,6 +271,24 @@ function buildContainerArgs(
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
+  // GitHub CLI — pass token and optional git identity for PR workflows.
+  // Read from .env (not process.env) so the token stays out of the host's
+  // process environment, matching the credential isolation pattern.
+  const githubEnv = readEnvFile([
+    'GITHUB_TOKEN',
+    'GIT_USER_NAME',
+    'GIT_USER_EMAIL',
+  ]);
+  if (githubEnv.GITHUB_TOKEN) {
+    args.push('-e', `GITHUB_TOKEN=${githubEnv.GITHUB_TOKEN}`);
+    if (githubEnv.GIT_USER_NAME) {
+      args.push('-e', `GIT_USER_NAME=${githubEnv.GIT_USER_NAME}`);
+    }
+    if (githubEnv.GIT_USER_EMAIL) {
+      args.push('-e', `GIT_USER_EMAIL=${githubEnv.GIT_USER_EMAIL}`);
+    }
+  }
+
   // Appium MCP bridge — inject URL and token for device control
   if (APPIUM_BRIDGE_ENABLED && group?.containerConfig?.appium) {
     args.push(
@@ -300,7 +342,12 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain, group);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    input.isMain,
+    group,
+  );
 
   logger.debug(
     {
@@ -310,7 +357,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      containerArgs: redactArgs(containerArgs),
     },
     'Container mount configuration',
   );
@@ -540,7 +587,7 @@ export async function runContainerAgent(
         }
         logLines.push(
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactArgs(containerArgs),
           ``,
           `=== Mounts ===`,
           mounts

@@ -93,6 +93,23 @@ When `APPIUM_BRIDGE_ENABLED=true`, the host exposes `appium-mcp` to containers f
 
 **Risk:** A container with appium access can interact with any app on the connected device. This is by design — the feature is opt-in per group and intended for trusted (main group) use only.
 
+### 7. GitHub Token (Direct Injection)
+
+When `GITHUB_TOKEN` is set in `.env`, it is read via `readEnvFile()` and passed directly to containers as an environment variable. This deliberately does **not** use the credential proxy pattern because:
+
+- **`gh` CLI requires a real token** — it authenticates via `gh auth login --with-token`, not through an HTTP proxy
+- **Different protocols** — git push uses git-over-HTTPS, `gh` uses the GitHub REST API; neither can be routed through the Anthropic credential proxy
+
+**Defense in depth (three layers):**
+
+1. **Token scoping** — Use a fine-grained PAT limited to specific repositories with minimal permissions (Contents: Write, Pull requests: Write, Metadata: Read)
+2. **Client-side wrapper** — `safe-git.sh` blocks force push, direct push to protected branches, `reset --hard`, and remote branch deletion before they reach the network
+3. **Server-side enforcement** — GitHub branch protection rules reject force pushes and require PR reviews regardless of token permissions
+
+**Log redaction** — Container args containing `GITHUB_TOKEN` are redacted in host-side log output to prevent token leakage to disk.
+
+**Risk:** A container with `GITHUB_TOKEN` can perform any git/GitHub operation within the token's scope. Mitigated by token scoping, the safe-git wrapper, and branch protection rules.
+
 ## Privilege Comparison
 
 | Capability | Main Group | Non-Main Group |
@@ -102,6 +119,7 @@ When `APPIUM_BRIDGE_ENABLED=true`, the host exposes `appium-mcp` to containers f
 | Global memory | Implicit via project | `/workspace/global` (ro) |
 | Additional mounts | Configurable | Read-only unless allowed |
 | Network access | Unrestricted | Unrestricted |
+| GitHub access | If GITHUB_TOKEN set | If GITHUB_TOKEN set |
 | MCP tools | All | All |
 
 ## Security Architecture Diagram
@@ -131,6 +149,8 @@ When `APPIUM_BRIDGE_ENABLED=true`, the host exposes `appium-mcp` to containers f
 │  • File operations (limited to mounts)                            │
 │  • API calls routed through credential proxy                     │
 │  • Device control via Appium bridge (if enabled)                │
-│  • No real credentials in environment or filesystem              │
+│  • GitHub access via GITHUB_TOKEN (if configured, redacted in   │
+│    logs, scoped by safe-git wrapper)                             │
+│  • No Anthropic credentials in environment or filesystem        │
 └──────────────────────────────────────────────────────────────────┘
 ```
