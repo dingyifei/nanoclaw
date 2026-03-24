@@ -18,6 +18,8 @@ Your output is sent to the user or group.
 
 You also have `mcp__nanoclaw__send_message` which sends a message immediately while you're still working. This is useful when you want to acknowledge a request before starting longer work.
 
+For any task that takes longer than 30 seconds, send a brief progress update after each major step using `mcp__nanoclaw__send_message`. Keep updates short (1-2 sentences). Do not wait until the end — update as you go.
+
 ### Internal thoughts
 
 If part of your output is internal reasoning rather than something for the user, wrap it in `<internal>` tags:
