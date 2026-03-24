@@ -64,6 +64,9 @@ SECRET_KEYS = [
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
     "OLLAMA_HOST",
+    "GITHUB_TOKEN",
+    "GIT_USER_NAME",
+    "GIT_USER_EMAIL",
 ]
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -121,8 +124,35 @@ def find_group(groups: list[dict], query: str) -> dict | None:
     return None
 
 
-def run_container(runtime: str, image: str, payload: dict, timeout: int = 300) -> None:
-    cmd = [runtime, "run", "-i", "--rm", image]
+def run_container(runtime: str, image: str, payload: dict, secrets: dict,
+                  timeout: int = 300) -> None:
+    cmd = [runtime, "run", "-i", "--rm"]
+
+    # Timezone
+    import time
+    tz = os.environ.get("TZ") or time.tzname[0]
+    cmd += ["-e", f"TZ={tz}"]
+
+    # Auth credentials — passed directly (claw is a personal CLI tool)
+    if secrets.get("ANTHROPIC_API_KEY"):
+        cmd += ["-e", f"ANTHROPIC_API_KEY={secrets['ANTHROPIC_API_KEY']}"]
+    if secrets.get("CLAUDE_CODE_OAUTH_TOKEN") or secrets.get("ANTHROPIC_AUTH_TOKEN"):
+        token = secrets.get("CLAUDE_CODE_OAUTH_TOKEN") or secrets["ANTHROPIC_AUTH_TOKEN"]
+        cmd += ["-e", f"CLAUDE_CODE_OAUTH_TOKEN={token}"]
+    if secrets.get("ANTHROPIC_BASE_URL"):
+        cmd += ["-e", f"ANTHROPIC_BASE_URL={secrets['ANTHROPIC_BASE_URL']}"]
+
+    # GitHub token
+    for key in ("GITHUB_TOKEN", "GIT_USER_NAME", "GIT_USER_EMAIL"):
+        if secrets.get(key):
+            cmd += ["-e", f"{key}={secrets[key]}"]
+
+    # Run as current user for file permission compatibility
+    uid, gid = os.getuid(), os.getgid()
+    if uid not in (0, 1000):
+        cmd += ["--user", f"{uid}:{gid}", "-e", "HOME=/home/node"]
+
+    cmd.append(image)
     dbg(f"cmd: {' '.join(cmd)}")
 
     # Show payload sans secrets
@@ -311,7 +341,7 @@ def main():
         payload["resumeAt"] = "latest"
 
     print(f"[{group_name or jid}] running via {runtime}...", file=sys.stderr)
-    run_container(runtime, args.image, payload, timeout=args.timeout)
+    run_container(runtime, args.image, payload, secrets, timeout=args.timeout)
 
 
 if __name__ == "__main__":
