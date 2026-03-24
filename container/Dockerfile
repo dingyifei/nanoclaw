@@ -3,7 +3,7 @@
 
 FROM node:22-slim
 
-# Install system dependencies for Chromium
+# Layer 1: System dependencies for Chromium (rarely changes, ~250MB)
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -23,8 +23,10 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Layer 2: GitHub CLI (separate so Layer 1 stays cached on gh changes)
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
        > /etc/apt/sources.list.d/github-cli.list \
@@ -37,9 +39,8 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
-# Install safe git wrapper — blocks force push, direct push to main, hard reset
-COPY safe-git.sh /usr/local/bin/safe-git
-RUN chmod +x /usr/local/bin/safe-git
+# Layer 4: Safe git wrapper — blocks force push, direct push to main, hard reset
+COPY --chmod=+x safe-git.sh /usr/local/bin/safe-git
 
 # Create app directory
 WORKDIR /app
