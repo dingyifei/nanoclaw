@@ -1,7 +1,6 @@
 ---
 name: hotel-price-check
 description: Find the best effective hotel price by comparing direct rates, OTAs, cashback portals, airline portals, Gondola.ai, and BRG opportunities. Use when the user wants to book a hotel, compare hotel prices, or optimize hotel cashback.
-disable-model-invocation: true
 allowed-tools: Bash(agent-browser:*)
 argument-hint: "[hotel name] [location] [check-in] [check-out]"
 ---

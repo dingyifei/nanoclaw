@@ -9,7 +9,7 @@ import os from 'os';
 import { logger } from './logger.js';
 
 /** The container runtime binary name. */
-export const CONTAINER_RUNTIME_BIN = 'container';
+export const CONTAINER_RUNTIME_BIN: 'docker' | 'container' = 'docker';
 
 /**
  * Address containers use to reach the host machine.
@@ -148,44 +148,37 @@ export function stopContainer(name: string): string {
 
 /** Ensure the container runtime is running, starting it if needed. */
 export function ensureContainerRuntimeRunning(): void {
-  try {
-    execSync(`${CONTAINER_RUNTIME_BIN} system status`, { stdio: 'pipe' });
-    logger.debug('Container runtime already running');
-  } catch {
-    logger.info('Starting container runtime...');
+  if (CONTAINER_RUNTIME_BIN === 'container') {
+    // Apple Container: use `container system status` / `container system start`
     try {
-      execSync(`${CONTAINER_RUNTIME_BIN} system start`, {
+      execSync(`${CONTAINER_RUNTIME_BIN} system status`, { stdio: 'pipe' });
+      logger.debug('Container runtime already running');
+    } catch {
+      logger.info('Starting container runtime...');
+      try {
+        execSync(`${CONTAINER_RUNTIME_BIN} system start`, {
+          stdio: 'pipe',
+          timeout: 30000,
+        });
+        logger.info('Container runtime started');
+      } catch (err) {
+        logger.error({ err }, 'Failed to start container runtime');
+        throw new Error('Container runtime is required but failed to start');
+      }
+    }
+  } else {
+    // Docker/OrbStack: verify with `docker info`
+    try {
+      execSync(`${CONTAINER_RUNTIME_BIN} info`, {
         stdio: 'pipe',
-        timeout: 30000,
+        timeout: 10000,
       });
-      logger.info('Container runtime started');
+      logger.debug('Container runtime already running');
     } catch (err) {
-      logger.error({ err }, 'Failed to start container runtime');
-      console.error(
-        '\n╔════════════════════════════════════════════════════════════════╗',
+      logger.error({ err }, 'Docker is not running');
+      throw new Error(
+        'Container runtime is required but failed to start. Ensure Docker/OrbStack is running.',
       );
-      console.error(
-        '║  FATAL: Container runtime failed to start                      ║',
-      );
-      console.error(
-        '║                                                                ║',
-      );
-      console.error(
-        '║  Agents cannot run without a container runtime. To fix:        ║',
-      );
-      console.error(
-        '║  1. Ensure Apple Container is installed                        ║',
-      );
-      console.error(
-        '║  2. Run: container system start                                ║',
-      );
-      console.error(
-        '║  3. Restart NanoClaw                                           ║',
-      );
-      console.error(
-        '╚════════════════════════════════════════════════════════════════╝\n',
-      );
-      throw new Error('Container runtime is required but failed to start');
     }
   }
 }
@@ -193,18 +186,33 @@ export function ensureContainerRuntimeRunning(): void {
 /** Kill orphaned NanoClaw containers from previous runs. */
 export function cleanupOrphans(): void {
   try {
-    const output = execSync(`${CONTAINER_RUNTIME_BIN} ls --format json`, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    const containers: { status: string; configuration: { id: string } }[] =
-      JSON.parse(output || '[]');
-    const orphans = containers
-      .filter(
-        (c) =>
-          c.status === 'running' && c.configuration.id.startsWith('nanoclaw-'),
-      )
-      .map((c) => c.configuration.id);
+    let orphans: string[];
+    if (CONTAINER_RUNTIME_BIN === 'container') {
+      // Apple Container: JSON output with { status, configuration.id }
+      const output = execSync(`${CONTAINER_RUNTIME_BIN} ls --format json`, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        encoding: 'utf-8',
+      });
+      const containers: { status: string; configuration: { id: string } }[] =
+        JSON.parse(output || '[]');
+      orphans = containers
+        .filter(
+          (c) =>
+            c.status === 'running' &&
+            c.configuration.id.startsWith('nanoclaw-'),
+        )
+        .map((c) => c.configuration.id);
+    } else {
+      // Docker: use --filter and --format to list running nanoclaw containers
+      const output = execSync(
+        `${CONTAINER_RUNTIME_BIN} ps --filter "name=nanoclaw-" --format "{{.Names}}"`,
+        { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
+      );
+      orphans = output
+        .trim()
+        .split('\n')
+        .filter((n) => n.startsWith('nanoclaw-'));
+    }
     for (const name of orphans) {
       try {
         execSync(stopContainer(name), { stdio: 'pipe' });
