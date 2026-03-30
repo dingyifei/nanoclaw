@@ -122,6 +122,7 @@ Wrap conditions in an object to configure per-task stale alerts:
 • remind_interval: duration string (e.g., "1h") — how often to re-alert after the first stale warning
 Both are optional. Bare conditions (without wrapper) use global defaults (10 deferrals, 1h reminders).`),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
+    script: z.string().optional().describe('Optional bash script to run before waking the agent. Script must output JSON on the last line of stdout: { "wakeAgent": boolean, "data"?: any }. If wakeAgent is false, the agent is not called. Test your script with bash -c "..." before scheduling.'),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -167,6 +168,7 @@ Both are optional. Bare conditions (without wrapper) use global defaults (10 def
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
+      script: args.script || undefined,
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'group',
@@ -345,6 +347,7 @@ server.tool(
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
     conditions: z.any().optional().describe('New execution conditions (see schedule_task for format). Pass null or empty object to clear conditions.'),
+    script: z.string().optional().describe('New script for the task. Set to empty string to remove the script.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -378,6 +381,7 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
     if (args.prompt !== undefined) data.prompt = args.prompt;
+    if (args.script !== undefined) data.script = args.script;
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
     if (args.conditions !== undefined) data.conditions = args.conditions ? JSON.stringify(args.conditions) : '';
