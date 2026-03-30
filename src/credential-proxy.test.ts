@@ -193,6 +193,7 @@ describe('credential-proxy', () => {
     expect(res.body).toBe('Bad Gateway');
   });
 
+
   describe('proxy token validation', () => {
     const TOKEN = 'test-secret-token-abc123';
 
