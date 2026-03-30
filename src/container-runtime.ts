@@ -121,7 +121,6 @@ export async function ensureBridge100(): Promise<string> {
   return '0.0.0.0';
 }
 
-
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {
   // On Linux, host.docker.internal isn't built-in — add it explicitly
