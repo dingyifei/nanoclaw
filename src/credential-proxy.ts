@@ -69,7 +69,6 @@ export function startCredentialProxy(
         }
       }
 
-
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {

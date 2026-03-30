@@ -39,7 +39,6 @@ export function setProxyToken(token: string): void {
   proxyToken = token;
 }
 
-
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
